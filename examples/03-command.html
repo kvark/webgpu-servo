@@ -1,0 +1,150 @@
+<html>
+
+<head>
+<title>WebGPU test-3</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script type="text/javascript">
+    var gpu;
+    var red = 0.0;
+
+    function webGpuStart() {
+        var canvas = document.getElementById("test-canvas");
+        var context = canvas.getContext("experimental-webgpu");
+        if (!context) {
+            alert("Could not initialise WebGPU, sorry :-(");
+        }
+
+        var adapter = context.enumerateAdapters()[0];
+        var queueFamily = adapter
+            .getQueueFamilies()
+            .find(function(family) {
+                return (family.flags & adapter.QUEUE_GENERAL) != 0;
+            });
+
+        var device = adapter.open([{ id: queueFamily.id, count: 1 }]);
+        var queue = device.generalQueue; //TODO: generalQueues[0]
+        var frameFence = device.createFence(false);
+
+        var swapChain = context.buildSwapchain(queue);
+
+        var renderpass = device.createRenderpass(
+            [{
+                format: swapChain.format,
+                srcLayout: "Undefined",
+                dstLayout: "Present",
+                loadOp: "Clear",
+                storeOp: "Store",
+            }],
+            [
+                [{
+                    attachmentId: 0,
+                    layout: "ColorAttachmentOptimal",
+                }]
+            ],
+            [{
+                srcPass: null,
+                dstPass: 0,
+                srcStages: device.PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT,
+                dstStages: device.PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT,
+                srcAccess: 0,
+                dstAccess: device.ACCESS_COLOR_ATTACHMENT_READ | device.ACCESS_COLOR_ATTACHMENT_WRITE,
+            }]
+        );
+
+        var swapSequence = swapChain
+            .getImages()
+            .map(function(image) {
+                var size = swapChain.getSize();
+                size.layers = 1;
+                let rtv = device.viewImageAsRenderTarget(image, swapChain.format);
+                let fbo = device.createFramebuffer(renderpass, size, [rtv], null);
+                return { image: image, rtv: rtv, fbo: fbo };
+            });
+
+        var commandPool = queue.createCommandPool(0);
+        var commandBuffer = commandPool.allocateCommandBuffers(1)[0];
+
+        gpu = {
+            context: context,
+            device: device,
+            queue: queue, 
+            swapChain: swapChain,
+            swapSequence: swapSequence,
+            graphicsPool: commandPool,
+            commandBuffer: commandBuffer,
+            frameFence: frameFence,
+            renderpass: renderpass,
+        };
+
+        setInterval(webGpuRender, 60);
+    }
+
+    function webGpuRender() {
+        gpu.device.resetFences([gpu.frameFence]);
+        gpu.graphicsPool.reset();
+
+        var frameId = gpu.swapChain.acquireNextImage(null);
+        var frame = gpu.swapSequence[frameId];
+        var cb = gpu.commandBuffer;
+        cb.begin();
+
+        /*let rtvRenderBarrier = {
+            stateSrc: {
+                access: 0,
+                layout: "Undefined",
+            },
+            stateDst: {
+                access: gpu.device.ACCESS_COLOR_ATTACHMENT_WRITE,
+                layout: "ColorAttachmentOptimal",
+            },
+            target: frame.image,
+        };
+        cb.pipelineBarrier([], [rtvRenderBarrier]);*/
+
+        var size = gpu.swapChain.getSize();
+        var rect = {
+            x: 0,
+            y: 0,
+            width: size.width,
+            height: size.height,
+        };
+        var clearValue = {
+            kind: "ColorFloat",
+            data: [red, 0.2, 0.3, 1.0],
+        };
+        cb.beginRenderpass(gpu.renderpass, frame.fbo, rect, [clearValue]);
+        //TODO
+        cb.endRenderpass();
+
+        /*let rtvPresentBarrier = {
+            stateSrc: {
+                access: gpu.device.ACCESS_COLOR_ATTACHMENT_WRITE,
+                layout: "ColorAttachmentOptimal",
+            },
+            stateDst: {
+                access: 0,
+                layout: "Present",
+            },
+            target: frame.image,
+        };
+        cb.pipelineBarrier([], [rtvPresentBarrier]);
+        */
+
+        cb.finish();
+        gpu.queue.submit([cb], [], [], gpu.frameFence);
+        //wait_semaphores: &[(&mut frame_semaphore, pso::BOTTOM_OF_PIPE)],
+        gpu.device.waitForFences([gpu.frameFence], "All", 100000);
+
+        gpu.swapChain.present();
+
+        red += 0.01;
+        if (red >= 1.0) red -= 1.0;
+    }
+</script>
+</head>
+
+<body onload="webGpuStart();">
+<canvas id="test-canvas" style="border: none;" width="720" height="400"></canvas>
+</body>
+</html>

@@ -1,0 +1,28 @@
+<html>
+
+<head>
+<title>WebGPU test-1</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script type="text/javascript">
+    var context;
+
+    function webGpuStart() {
+        var canvas = document.getElementById("test-canvas");
+        context = canvas.getContext("experimental-webgpu");
+        if (!context) {
+            alert("Could not initialise WebGpu, sorry :-(");
+        }
+        setInterval(webGpuRender, 60);
+    }
+
+    function webGpuRender() {
+        context.endFrame();
+    }
+</script>
+</head>
+
+<body onload="webGpuStart();">
+<canvas id="test-canvas" style="border: none;" width="720" height="400"></canvas>
+</body>
+</html>
