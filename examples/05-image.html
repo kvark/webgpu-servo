@@ -89,7 +89,42 @@ void main() {
         var commandPool = queue.createCommandPool(0);
         var commandBuffer = commandPool.allocateCommandBuffers(1)[0];
 
+        /*// Pipeline Layout
+        let set0_layout = device.create_descriptor_set_layout(&[
+                pso::DescriptorSetLayoutBinding {
+                    binding: 0,
+                    ty: pso::DescriptorType::SampledImage,
+                    count: 1,
+                    stage_flags: pso::STAGE_FRAGMENT,
+                }
+            ],
+        );
+
+        let set1_layout = device.create_descriptor_set_layout(&[
+                pso::DescriptorSetLayoutBinding {
+                    binding: 0,
+                    ty: pso::DescriptorType::Sampler,
+                    count: 1,
+                    stage_flags: pso::STAGE_FRAGMENT,
+                }
+            ],
+        );*/
+
         var pipelineLayout = device.createPipelineLayout([]);
+
+        /*// Descriptors
+            let mut srv_pool = device.create_descriptor_pool(
+                1, // sets
+                &[pso::DescriptorRangeDesc { ty: pso::DescriptorType::SampledImage, count: 1 }],
+            );
+            let set0 = srv_pool.allocate_sets(&[&set0_layout]);
+
+            let mut sampler_pool = device.create_descriptor_pool(
+                1, // sets
+                &[pso::DescriptorRangeDesc { ty: pso::DescriptorType::Sampler, count: 1 }],
+            );
+            let set1 = sampler_pool.allocate_sets(&[&set1_layout]);
+        */
 
         let vsModule = device.createShaderModuleFromGLSL("Vertex",
             document.getElementById("shader-vs").textContent);
@@ -121,6 +156,60 @@ void main() {
             subpass: 0,
         };
         let pso = device.createGraphicsPipelines([pipelineDesc])[0];
+
+        /*//Load the image
+        let upload_heap =
+            heap_types.iter().find(|&&heap_type| {
+                heap_type.properties.contains(m::CPU_VISIBLE | m::COHERENT)
+            })
+            .unwrap();
+        let image_upload_heap = device.create_heap(upload_heap, d::ResourceHeapType::Buffers, upload_size).unwrap();
+        let image_upload_buffer = {
+            let buffer = device.create_buffer(upload_size, image_stride as u64, buffer::TRANSFER_SRC).unwrap();
+            device.bind_buffer_memory(&image_upload_heap, 0, buffer).unwrap()
+        };
+
+        // copy image data into staging buffer
+        if let Ok(mut mapping) = device.write_mapping::<u8>(&image_upload_buffer, 0..upload_size) {
+            for y in 0 .. height as usize {
+                let row = &(*img)[y*(width as usize)*image_stride .. (y+1)*(width as usize)*image_stride];
+                let dest_base = y * row_pitch as usize;
+                mapping[dest_base .. dest_base + row.len()].copy_from_slice(row);
+            }
+        }
+
+        let image = device.create_image(kind, 1, ColorFormat::get_format(), i::TRANSFER_DST | i::SAMPLED).unwrap(); // TODO: usage
+        println!("{:?}", image);
+        let image_req = device.get_image_requirements(&image);
+
+        let device_heap = heap_types.iter().find(|&&heap_type| heap_type.properties.contains(m::DEVICE_LOCAL)).unwrap();
+        let image_heap = device.create_heap(device_heap, d::ResourceHeapType::Images, image_req.size).unwrap();
+
+        let image_logo = device.bind_image_memory(&image_heap, 0, image).unwrap();
+        let image_srv = device.view_image_as_shader_resource(&image_logo, ColorFormat::get_format()).unwrap();
+
+        let sampler = device.create_sampler(
+            i::SamplerInfo::new(
+                i::FilterMethod::Bilinear,
+                i::WrapMode::Clamp,
+            )
+        );
+
+        device.update_descriptor_sets(&[
+            pso::DescriptorSetWrite {
+                set: &set0[0],
+                binding: 0,
+                array_offset: 0,
+                write: pso::DescriptorWrite::SampledImage(vec![(&image_srv, i::ImageLayout::Undefined)]),
+            },
+            pso::DescriptorSetWrite {
+                set: &set1[0],
+                binding: 0,
+                array_offset: 0,
+                write: pso::DescriptorWrite::Sampler(vec![&sampler]),
+            },
+        ]);
+        */
 
         gpu = {
             context: context,
@@ -180,6 +269,7 @@ void main() {
 </head>
 
 <body onload="webGpuStart();">
+<img src="gfx-logo.html"></img>
 <canvas id="test-canvas" style="border: none;" width="720" height="400"></canvas>
 </body>
 </html>

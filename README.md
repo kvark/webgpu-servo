@@ -1,5 +1,5 @@
 # webgpu-servo
-[WebGPU]() prototope in [Servo]() browser, backed by [gfx low-level core]().
+[WebGPU](https://github.com/gpuweb/gpuweb) prototope in [Servo](https://github.com/servo/servo/) browser, backed by [gfx low-level core](https://github.com/gfx-rs/gfx).
 
 ## Build instructions
 
@@ -17,4 +17,4 @@ cd webgpu-servo/servo
 - [ ] move `webrender_api` from the GPU thread onto `WebGpuRenderingContext`, avoid `Present` call
 - [x] have a deque of frames to show, avoid waiting as much in the external handler
 - [ ] investigate one-shot channels and `Future` usage for latency hiding
-- [ ] textures and heaps (test5)
+- [ ] textures and heaps: test [05-image](examples/05-image.html)
