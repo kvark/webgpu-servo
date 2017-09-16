@@ -33,26 +33,27 @@ void main() {
     var red = 0.0;
 
     function webGpuStart() {
-        var canvas = document.getElementById("test-canvas");
-        var context = canvas.getContext("experimental-webgpu");
+        let canvas = document.getElementById("test-canvas");
+        let context = canvas.getContext("experimental-webgpu");
         if (!context) {
             alert("Could not initialise WebGPU, sorry :-(");
         }
 
-        var adapter = context.enumerateAdapters()[0];
-        var queueFamily = adapter
+        let adapter = context.enumerateAdapters()[0];
+        let queueFamily = adapter
             .getQueueFamilies()
             .find(function(family) {
                 return (family.flags & adapter.QUEUE_GENERAL) != 0;
             });
 
-        var device = adapter.open([{ id: queueFamily.id, count: 1 }]);
-        var queue = device.generalQueue; //TODO: generalQueues[0]
-        var frameFence = device.createFence(false);
+        let webgpu = adapter.open([{ id: queueFamily.id, count: 1 }]);
+        let device = webgpu.device;
+        let queue = webgpu.generalQueues[0];
 
-        var swapChain = context.buildSwapchain(queue);
+        let frameFence = device.createFence(false);
+        let swapChain = context.buildSwapchain(queue);
 
-        var renderpass = device.createRenderpass(
+        let renderpass = device.createRenderpass(
             [{
                 format: swapChain.format,
                 srcLayout: "Undefined",
@@ -72,59 +73,39 @@ void main() {
                 srcStages: device.PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT,
                 dstStages: device.PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT,
                 srcAccess: 0,
-                dstAccess: device.ACCESS_COLOR_ATTACHMENT_READ | device.ACCESS_COLOR_ATTACHMENT_WRITE,
+                dstAccess: device.IMAGE_ACCESS_COLOR_ATTACHMENT_READ | device.IMAGE_ACCESS_COLOR_ATTACHMENT_WRITE,
             }]
         );
 
-        var swapSequence = swapChain
+        let swapSequence = swapChain
             .getImages()
             .map(function(image) {
-                var size = swapChain.getSize();
+                let size = swapChain.getSize();
                 size.layers = 1;
                 let rtv = device.viewImageAsRenderTarget(image, swapChain.format);
                 let fbo = device.createFramebuffer(renderpass, size, [rtv], null);
                 return { image: image, rtv: rtv, fbo: fbo };
             });
 
-        var commandPool = queue.createCommandPool(0);
-        var commandBuffer = commandPool.allocateCommandBuffers(1)[0];
+        let commandPool = queue.createCommandPool(0);
+        let commandBuffer = commandPool.allocateCommandBuffers(1)[0];
 
-        /*// Pipeline Layout
-        let set0_layout = device.create_descriptor_set_layout(&[
-                pso::DescriptorSetLayoutBinding {
-                    binding: 0,
-                    ty: pso::DescriptorType::SampledImage,
-                    count: 1,
-                    stage_flags: pso::STAGE_FRAGMENT,
-                }
-            ],
-        );
-
-        let set1_layout = device.create_descriptor_set_layout(&[
-                pso::DescriptorSetLayoutBinding {
-                    binding: 0,
-                    ty: pso::DescriptorType::Sampler,
-                    count: 1,
-                    stage_flags: pso::STAGE_FRAGMENT,
-                }
-            ],
-        );*/
-
-        var pipelineLayout = device.createPipelineLayout([]);
-
-        /*// Descriptors
-            let mut srv_pool = device.create_descriptor_pool(
-                1, // sets
-                &[pso::DescriptorRangeDesc { ty: pso::DescriptorType::SampledImage, count: 1 }],
-            );
-            let set0 = srv_pool.allocate_sets(&[&set0_layout]);
-
-            let mut sampler_pool = device.create_descriptor_pool(
-                1, // sets
-                &[pso::DescriptorRangeDesc { ty: pso::DescriptorType::Sampler, count: 1 }],
-            );
-            let set1 = sampler_pool.allocate_sets(&[&set1_layout]);
-        */
+        // Pipeline Layout
+        let setLayout = device.createDescriptorSetLayout([
+            {
+                binding: 0,
+                count: 1,
+                type: "SampledImage",
+                stages: device.SHADER_STAGE_FRAGMENT,
+            },
+            {
+                binding: 1,
+                count: 1,
+                type: "Sampler",
+                stages: device.SHADER_STAGE_FRAGMENT,
+            }
+        ]);
+        let pipelineLayout = device.createPipelineLayout([setLayout]);
 
         let vsModule = device.createShaderModuleFromGLSL("Vertex",
             document.getElementById("shader-vs").textContent);
@@ -157,35 +138,61 @@ void main() {
         };
         let pso = device.createGraphicsPipelines([pipelineDesc])[0];
 
-        /*//Load the image
-        let upload_heap =
-            heap_types.iter().find(|&&heap_type| {
-                heap_type.properties.contains(m::CPU_VISIBLE | m::COHERENT)
-            })
-            .unwrap();
-        let image_upload_heap = device.create_heap(upload_heap, d::ResourceHeapType::Buffers, upload_size).unwrap();
-        let image_upload_buffer = {
-            let buffer = device.create_buffer(upload_size, image_stride as u64, buffer::TRANSFER_SRC).unwrap();
-            device.bind_buffer_memory(&image_upload_heap, 0, buffer).unwrap()
-        };
+        //Load the image
+        let imageCanvas = document.getElementById("image-canvas");
+        let imageCtx = imageCanvas.getContext('2d');
+        let imageData = imageCtx.getImageData(0, 0, imageCanvas.width, imageCanvas.height).data;
+        let imageStride = 4;
+        let rowAlignmentMask = device.getLimits().minBufferCopyPitchAlignment - 1;
+        let imagePitch = imageCanvas.width * imageStride;
+        let uploadPitch = (imagePitch + rowAlignmentMask) & ~rowAlignmentMask;
+        let uploadSize = uploadPitch * imageCanvas.height;
 
-        // copy image data into staging buffer
-        if let Ok(mut mapping) = device.write_mapping::<u8>(&image_upload_buffer, 0..upload_size) {
-            for y in 0 .. height as usize {
-                let row = &(*img)[y*(width as usize)*image_stride .. (y+1)*(width as usize)*image_stride];
-                let dest_base = y * row_pitch as usize;
-                mapping[dest_base .. dest_base + row.len()].copy_from_slice(row);
-            }
+        // copy image data with alignments into a shared buffer
+        let sab = new ArrayBuffer(uploadSize); //TODO: SharedArrayBuffer
+        for(let y=0; y<imageCanvas.height; ++y) {
+            let target = new Uint8Array(sab, y*uploadPitch, uploadPitch);
+            target.set(imageData.subarray(y*imagePitch, (y+1)*imagePitch));
         }
 
-        let image = device.create_image(kind, 1, ColorFormat::get_format(), i::TRANSFER_DST | i::SAMPLED).unwrap(); // TODO: usage
-        println!("{:?}", image);
-        let image_req = device.get_image_requirements(&image);
+        let uploadHeapType = webgpu.heapTypes.find(function(ht) {
+            return (ht.properties & device.HEAP_PROPERTY_CPU_VISIBLE) != 0 &&
+                   (ht.properties & device.HEAP_PROPERTY_COHERENT) != 0;
+        });
+        let uploadHeap = device.createHeap(uploadHeapType.id, "Buffers", uploadSize+0x10000);
+        let uploadBufferDesc = {
+            size: uploadSize,
+            stride: imageStride,
+            usage: device.BUFFER_USAGE_TRANSFER_SRC,
+        };
+        let uploadBuffer = device.createBuffer(uploadBufferDesc, uploadHeap, 0);
+        device.uploadBufferData(uploadBuffer, sab);
 
-        let device_heap = heap_types.iter().find(|&&heap_type| heap_type.properties.contains(m::DEVICE_LOCAL)).unwrap();
-        let image_heap = device.create_heap(device_heap, d::ResourceHeapType::Images, image_req.size).unwrap();
+        let deviceHeapType = webgpu.heapTypes.find(function(ht) {
+            return (ht.properties & device.HEAP_PROPERTY_DEVICE_LOCAL) != 0;
+        });
+        let imageHeap = device.createHeap(deviceHeapType.id, "Images", uploadSize+0x10000); //TODO: size
+        let imageDesc = {
+            width: imageCanvas.width,
+            height: imageCanvas.height,
+            format: "R8G8B8A8_SRGB",
+            usage: device.IMAGE_USAGE_TRANSFER_DST | device.IMAGE_USAGE_SAMPLED,
+        };
+        let image = device.createImage(imageDesc, imageHeap, 0);
 
-        let image_logo = device.bind_image_memory(&image_heap, 0, image).unwrap();
+        // Descriptors
+        let descriptorPool = device.createDescriptorPool(1, [
+            {
+                type: "SampledImage",
+                count: 1,
+            },
+            {
+                type: "Sampler",
+                count: 1,
+            }
+        ]);
+        let set = descriptorPool.allocateSets([setLayout]);
+        /*
         let image_srv = device.view_image_as_shader_resource(&image_logo, ColorFormat::get_format()).unwrap();
 
         let sampler = device.create_sampler(
@@ -225,26 +232,86 @@ void main() {
             pso: pso,
         };
 
+        let extent = {
+            width: imageCanvas.width,
+            height: imageCanvas.height,
+        };
+        webGpuInit(uploadBuffer, uploadPitch, image, extent);
+
         setInterval(webGpuRender, 60);
     }
 
+    function webGpuInit(uploadBuffer, bufferPitch, image, extent) {
+        let dev = gpu.device;
+        let cb = gpu.commandBuffer;
+        cb.begin();
+
+        let imageBarrierBefore = {
+            stateSrc: {
+                access: 0,
+                layout: "Undefined",
+            },
+            stateDst: {
+                access: dev.IMAGE_ACCESS_TRANSFER_WRITE,
+                layout: "TransferDstOptimal",
+            },
+            target: image,
+        };
+        cb.pipelineBarrier(
+            dev.PIPELINE_STAGE_TOP_OF_PIPE,
+            dev.PIPELINE_STAGE_TRANSFER,
+            [], [imageBarrierBefore]
+        );
+
+        cb.copyBufferToImage(uploadBuffer, image, "TransferDstOptimal", [
+            {
+                bufferOffset: 0,
+                bufferRowPitch: bufferPitch,
+                bufferSlicePitch: bufferPitch * extent.height,
+                imageOffset: {},
+                imageExtent: extent,
+            }
+        ]);
+
+        let imageBarrierAfter = {
+            stateSrc: {
+                access: dev.IMAGE_ACCESS_TRANSFER_WRITE,
+                layout: "TransferDstOptimal",
+            },
+            stateDst: {
+                access: dev.IMAGE_ACCESS_SHADER_READ,
+                layout: "ShaderReadOnlyOptimal",
+            },
+            target: image,
+        };
+        cb.pipelineBarrier(
+            dev.PIPELINE_STAGE_TRANSFER,
+            dev.PIPELINE_STAGE_FRAGMENT_SHADER,
+            [], [imageBarrierAfter]
+        );
+
+        cb.finish();
+        gpu.queue.submit([cb], [], [], gpu.frameFence);
+    }
+
     function webGpuRender() {
+        gpu.device.waitForFences([gpu.frameFence], "All", 100000);
         gpu.device.resetFences([gpu.frameFence]);
         gpu.graphicsPool.reset();
 
-        var frameId = gpu.swapChain.acquireNextImage(null);
-        var frame = gpu.swapSequence[frameId];
-        var cb = gpu.commandBuffer;
+        let frameId = gpu.swapChain.acquireNextImage(null);
+        let frame = gpu.swapSequence[frameId];
+        let cb = gpu.commandBuffer;
         cb.begin();
 
-        var size = gpu.swapChain.getSize();
-        var rect = {
+        let size = gpu.swapChain.getSize();
+        let rect = {
             x: 0,
             y: 0,
             width: size.width,
             height: size.height,
         };
-        var clearValue = {
+        let clearValue = {
             kind: "ColorFloat",
             data: [red, 0.2, 0.3, 1.0],
         };
@@ -258,7 +325,6 @@ void main() {
         cb.finish();
         gpu.queue.submit([cb], [], [], gpu.frameFence);
         //wait_semaphores: &[(&mut frame_semaphore, pso::BOTTOM_OF_PIPE)],
-        gpu.device.waitForFences([gpu.frameFence], "All", 100000);
 
         gpu.swapChain.present();
 
@@ -266,10 +332,12 @@ void main() {
         if (red >= 1.0) red -= 1.0;
     }
 </script>
-</head>
 
+</head>
 <body onload="webGpuStart();">
-<img src="gfx-logo.html"></img>
 <canvas id="test-canvas" style="border: none;" width="720" height="400"></canvas>
+<canvas id="image-canvas" style="display: none">
+    <img src="gfx-logo.png"/>
+</canvas>
 </body>
 </html>
