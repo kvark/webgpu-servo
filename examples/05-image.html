@@ -64,6 +64,55 @@ float4 fs_main(VsOutput input) : SV_TARGET {
     return u_Texture.Sample(u_Sampler, input.uv);
 }
 </script>
+<script id="shader-msl" type="x-shader/other">
+using namespace metal;
+
+struct VsInput {
+  float2 a_Pos [[attribute(0)]];
+  float2 a_Uv [[attribute(1)]];
+};
+
+struct VsOutput {
+  float4 pos [[position]];
+  float2 uv;
+};
+
+vertex VsOutput vs_main(VsInput in [[stage_in]],
+                        unsigned int vid [[ vertex_id ]]) {
+  float2 pos;
+  switch(vid) {
+    case 0: pos = float2(-0.5, -0.5); break;
+    case 1: pos = float2(+0.5, -0.5); break;
+    case 2: pos = float2(-0.5, +0.5); break;
+    case 3: pos = float2(+0.5, +0.5); break;
+  }
+
+  VsOutput out;
+  out.pos = float4(pos, 0.0, 1.0);
+  // Texture coordinates are in OpenGL/Vulkan (origin bottom left)
+  // convert them to Metal (origin top left)
+  out.uv = float2(pos.x + 0.5, 0.5 - pos.y);
+  return out;
+}
+
+fragment float4 fs_main(VsOutput in [[stage_in]], 
+                        texture2d<float> tex2D [[ texture(0) ]],
+                        sampler sampler2D [[ sampler(1) ]]) {
+  return tex2D.sample(sampler2D, in.uv);
+}
+
+struct PixelArg {
+  texture2d<float> tex2D [[ id(0) ]];
+  sampler sampler2D [[ id(1) ]];
+};
+
+fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
+  device PixelArg* pixelArg [[ buffer(0) ]])
+{
+  return pixelArg->tex2D.sample(pixelArg->sampler2D, in.uv);
+}
+
+</script>
 
 <script type="text/javascript">
     var gpu;
@@ -145,13 +194,18 @@ float4 fs_main(VsOutput input) : SV_TARGET {
         ]);
         let pipelineLayout = device.createPipelineLayout([setLayout]);
 
-        let isWindows = navigator.platform == "Win32";
         let vsModule, fsModule;
-        if (isWindows) {
+        let vsEntry = "main", fsEntry = "main";
+        if (navigator.platform == "Win32") {
             vsModule = device.createShaderModuleFromHLSL("Vertex",
                 document.getElementById("shader-hlsl").textContent);
             fsModule = device.createShaderModuleFromHLSL("Fragment",
                 document.getElementById("shader-hlsl").textContent);
+        } else if (navigator.platform == "Mac") {
+            vsModule = fsModule = device.createShaderModuleFromMSL(
+                document.getElementById("shader-msl").textContent);
+            vsEntry = "vs_main";
+            fsEntry = "fs_main_indirect"; //alternatively, "fs_main"
         } else {
             vsModule = device.createShaderModuleFromGLSL("Vertex",
                 document.getElementById("shader-vs").textContent);
@@ -161,8 +215,8 @@ float4 fs_main(VsOutput input) : SV_TARGET {
 
         let pipelineDesc = {
             shaders: {
-                "vs": { shader_module: vsModule, entry_point: "main" },
-                "fs": { shader_module: fsModule, entry_point: "main" },
+                "vs": { shader_module: vsModule, entry_point: vsEntry },
+                "fs": { shader_module: fsModule, entry_point: fsEntry },
             },
             inputAssemblyState: {
                 topology: "TriangleStrip",
@@ -256,7 +310,7 @@ float4 fs_main(VsOutput input) : SV_TARGET {
             return (ht.properties & gpu.device.HEAP_PROPERTY_CPU_VISIBLE) != 0 &&
                    (ht.properties & gpu.device.HEAP_PROPERTY_COHERENT) != 0;
         });
-        let uploadHeap = gpu.device.createHeap(uploadHeapType.id, "Buffers", uploadSize+0x10000);
+        let uploadHeap = gpu.device.createHeap(uploadHeapType.id, "Buffers", uploadSize+0x40000);
         let uploadBufferDesc = {
             size: uploadSize,
             stride: imageStride,
@@ -268,7 +322,7 @@ float4 fs_main(VsOutput input) : SV_TARGET {
         let deviceHeapType = gpu.heapTypes.find(function(ht) {
             return (ht.properties & gpu.device.HEAP_PROPERTY_DEVICE_LOCAL) != 0;
         });
-        let imageHeap = gpu.device.createHeap(deviceHeapType.id, "Images", uploadSize+0x10000); //TODO: size
+        let imageHeap = gpu.device.createHeap(deviceHeapType.id, "Images", uploadSize+0x40000); //TODO: size
         let imageDesc = {
             width: imageCanvas.width,
             height: imageCanvas.height,
@@ -393,9 +447,9 @@ float4 fs_main(VsOutput input) : SV_TARGET {
             kind: "ColorFloat",
             data: [red, 0.2, 0.3, 1.0],
         };
-        cb.beginRenderpass(gpu.renderpass, frame.fbo, rect, [clearValue]);
         cb.bindGraphicsPipeline(gpu.pso);
         cb.bindGraphicsDescriptorSets(gpu.pipelineLayout, 0, gpu.desc_sets);
+        cb.beginRenderpass(gpu.renderpass, frame.fbo, rect, [clearValue]);
         cb.setScissors([rect]);
         cb.setViewports([{ rect: rect, near: 0.0, far: 1.0 }]);
         cb.draw(0, 4, 0, 1)
