@@ -2,3 +2,6 @@
 	path = servo
 	url = https://github.com/kvark/servo
 	branch = webgpu
+[submodule "ipc-future"]
+	path = ipc-future
+	url = https://github.com/kvark/ipc-future
