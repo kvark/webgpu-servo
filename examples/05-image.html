@@ -36,83 +36,6 @@ void main() {
     Target0 = texture(sampler2D(u_Texture, u_Sampler), v_Uv);
 }
 </script>
-<script id="shader-hlsl" type="x-shader/other">
-Texture2D u_Texture: register(t0, space0);
-SamplerState u_Sampler: register(s1, space1);
-
-struct VsOutput {
-    float4 pos: SV_POSITION;
-    float2 uv: TEXCOORD;
-};
-
-VsOutput vs_main(uint vid: SV_VertexID) {
-    float2 pos;
-    switch(vid) {
-        case 0: pos = float2(-0.5, -0.5); break;
-        case 1: pos = float2(+0.5, -0.5); break;
-        case 2: pos = float2(-0.5, +0.5); break;
-        case 3: pos = float2(+0.5, +0.5); break;
-    }
-    VsOutput output = {
-        float4(pos, 0.0, 1.0),
-        float2(pos.x + 0.5, 0.5 - pos.y)
-    };
-    return output;
-}
-
-float4 fs_main(VsOutput input) : SV_TARGET {
-    return u_Texture.Sample(u_Sampler, input.uv);
-}
-</script>
-<script id="shader-msl" type="x-shader/other">
-using namespace metal;
-
-struct VsInput {
-  float2 a_Pos [[attribute(0)]];
-  float2 a_Uv [[attribute(1)]];
-};
-
-struct VsOutput {
-  float4 pos [[position]];
-  float2 uv;
-};
-
-vertex VsOutput vs_main(VsInput in [[stage_in]],
-                        unsigned int vid [[ vertex_id ]]) {
-  float2 pos;
-  switch(vid) {
-    case 0: pos = float2(-0.5, -0.5); break;
-    case 1: pos = float2(+0.5, -0.5); break;
-    case 2: pos = float2(-0.5, +0.5); break;
-    case 3: pos = float2(+0.5, +0.5); break;
-  }
-
-  VsOutput out;
-  out.pos = float4(pos, 0.0, 1.0);
-  // Texture coordinates are in OpenGL/Vulkan (origin bottom left)
-  // convert them to Metal (origin top left)
-  out.uv = float2(pos.x + 0.5, 0.5 - pos.y);
-  return out;
-}
-
-fragment float4 fs_main(VsOutput in [[stage_in]], 
-                        texture2d<float> tex2D [[ texture(0) ]],
-                        sampler sampler2D [[ sampler(1) ]]) {
-  return tex2D.sample(sampler2D, in.uv);
-}
-
-struct PixelArg {
-  texture2d<float> tex2D [[ id(0) ]];
-  sampler sampler2D [[ id(1) ]];
-};
-
-fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
-  device PixelArg* pixelArg [[ buffer(0) ]])
-{
-  return pixelArg->tex2D.sample(pixelArg->sampler2D, in.uv);
-}
-
-</script>
 
 <script type="text/javascript">
     var gpu;
@@ -140,7 +63,7 @@ fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
         let frameFence = device.createFence(false);
         let swapChain = context.buildSwapchain(queue);
 
-        let renderpass = device.createRenderpass(
+        let renderPass = device.createRenderPass(
             [{
                 format: swapChain.format,
                 srcLayout: "Undefined",
@@ -169,8 +92,8 @@ fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
             .map(function(image) {
                 let size = swapChain.getSize();
                 size.layers = 1;
-                let rtv = device.viewImageAsRenderTarget(image, swapChain.format);
-                let fbo = device.createFramebuffer(renderpass, size, [rtv], null);
+                let rtv = device.createImageView(image, swapChain.format);
+                let fbo = device.createFramebuffer(renderPass, size, [rtv]);
                 return { image: image, rtv: rtv, fbo: fbo };
             });
 
@@ -194,29 +117,16 @@ fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
         ]);
         let pipelineLayout = device.createPipelineLayout([setLayout]);
 
-        let vsModule, fsModule;
-        let vsEntry = "main", fsEntry = "main";
-        if (navigator.platform == "Win32") {
-            vsModule = device.createShaderModuleFromHLSL("Vertex",
-                document.getElementById("shader-hlsl").textContent);
-            fsModule = device.createShaderModuleFromHLSL("Fragment",
-                document.getElementById("shader-hlsl").textContent);
-        } else if (navigator.platform == "Mac") {
-            vsModule = fsModule = device.createShaderModuleFromMSL(
-                document.getElementById("shader-msl").textContent);
-            vsEntry = "vs_main";
-            fsEntry = "fs_main_indirect"; //alternatively, "fs_main"
-        } else {
-            vsModule = device.createShaderModuleFromGLSL("Vertex",
-                document.getElementById("shader-vs").textContent);
-            fsModule = device.createShaderModuleFromGLSL("Fragment",
-                document.getElementById("shader-fs").textContent);
-        }
+        let vsModule = device.createShaderModuleFromGLSL("Vertex",
+            document.getElementById("shader-vs").textContent);
+        let fsModule = device.createShaderModuleFromGLSL("Fragment",
+            document.getElementById("shader-fs").textContent);
+        let entry = navigator.platform == "Mac" ? "main0" : "main";
 
         let pipelineDesc = {
             shaders: {
-                "vs": { shader_module: vsModule, entry_point: vsEntry },
-                "fs": { shader_module: fsModule, entry_point: fsEntry },
+                "vs": { shader_module: vsModule, entry_point: entry },
+                "fs": { shader_module: fsModule, entry_point: entry },
             },
             inputAssemblyState: {
                 topology: "TriangleStrip",
@@ -242,7 +152,7 @@ fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
                 ],
             },
             layout: pipelineLayout,
-            renderpass: renderpass,
+            renderPass: renderPass,
             subpass: 0,
         };
         let pso = device.createGraphicsPipelines([pipelineDesc])[0];
@@ -277,7 +187,7 @@ fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
             graphicsPool: commandPool,
             commandBuffer: commandBuffer,
             frameFence: frameFence,
-            renderpass: renderpass,
+            renderPass: renderPass,
             pipelineLayout: pipelineLayout,
             desc_sets: sets,
             pso: pso,
@@ -332,7 +242,7 @@ fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
         };
         let image = gpu.device.createImage(imageDesc, imageHeap, 0);
 
-        let imageView = gpu.device.viewImageAsShaderResource(image, "R8G8B8A8_SRGB");
+        let imageView = gpu.device.createImageView(image, "R8G8B8A8_SRGB");
         let sampler = gpu.device.createSampler({
             filter: "Bilinear",
             wrap: "Clamp"
@@ -449,11 +359,11 @@ fragment float4 fs_main_indirect(VsOutput in [[stage_in]],
         };
         cb.bindGraphicsPipeline(gpu.pso);
         cb.bindGraphicsDescriptorSets(gpu.pipelineLayout, 0, gpu.desc_sets);
-        cb.beginRenderpass(gpu.renderpass, frame.fbo, rect, [clearValue]);
+        cb.beginRenderPass(gpu.renderPass, frame.fbo, rect, [clearValue]);
         cb.setScissors([rect]);
         cb.setViewports([{ rect: rect, near: 0.0, far: 1.0 }]);
         cb.draw(0, 4, 0, 1)
-        cb.endRenderpass();
+        cb.endRenderPass();
 
         cb.finish();
         gpu.queue.submit([cb], [], [], gpu.frameFence);
